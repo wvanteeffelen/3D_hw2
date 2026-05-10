@@ -1,0 +1,4 @@
+# Specify filepatterns you want git to ignore.
+
+/hw/2/cpp/build/*
+
