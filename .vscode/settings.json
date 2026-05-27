@@ -1,0 +1,11 @@
+{
+    "cmake.sourceDirectory": "C:/Users/wiege/OneDrive - Delft University of Technology/Documenten/hw02_3D/geo1004.2026/hw/2/cpp",
+    
+    "cmake.configureArgs": [
+        "-DCGAL_DIR=C:/path/to/your/CGAL"
+    ],
+
+    "cmake.debugConfig": {
+        "cwd": "${workspaceFolder}/build"
+    }
+}

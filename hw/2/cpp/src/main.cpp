@@ -15,11 +15,13 @@
 #include <cstdlib>
 #include <ctime>
 
+
 //-- https://github.com/nlohmann/json
 //-- used to read and write (City)JSON
 #include "json.hpp" //-- it is in the /include/ folder
 
 using json = nlohmann::json;
+
 
 int   get_no_roof_surfaces(const json& j);
 void  list_all_vertices(const json& j);
@@ -69,6 +71,70 @@ int main(int argc, const char * argv[]) {
     }
   }
 
+  // Step 1: Keep only LoD 2.2 and delete BuildingPart
+  
+
+  // Store BuildingPart IDs to remove later
+  std::vector<std::string> to_delete;
+
+  // Iterate over CityObjects
+  for (auto& [id, obj] : j["CityObjects"].items())
+    {
+      // Only process Buildings
+      if (obj["type"] != "Building")
+          continue;
+
+      // Only process buildings with children
+      if (!obj.contains("children"))
+          continue;
+
+      json lod22_geometries = json::array();
+
+      // Get children
+      auto children = obj["children"];
+
+      // Loop through children
+      for (auto& child_id_json : children)
+        {
+          std::string child_id = child_id_json;
+
+          auto& child = j["CityObjects"][child_id];
+
+          // Check geometries in BuildingPart
+          if (child.contains("geometry"))
+          {
+            for (auto& geom : child["geometry"])
+              {
+                // Keep only LoD2.2
+                if (geom["lod"] == "2.2")
+                  {
+                    lod22_geometries.push_back(geom);
+                    }
+                }
+            }
+
+        // Mark BuildingPart for deletion
+        to_delete.push_back(child_id);
+        }
+
+        // Remove old geometry (LoD0)
+        obj.erase("geometry");
+
+        // Add LoD2.2 geometry to Building
+        obj["geometry"] = lod22_geometries;
+
+        // Remove children attribute
+        obj.erase("children");
+    }
+
+  // Delete BuildingParts AFTER iteration
+  for (const auto& part_id : to_delete)
+  {
+    j["CityObjects"].erase(part_id);
+  }
+
+  
+
   //-- write to disk the modified city model (insert "_out" before ".city.json")
   std::string outfile = filename;
   size_t pos = outfile.rfind(".city.json");
@@ -85,6 +151,8 @@ int main(int argc, const char * argv[]) {
   std::cout << "Written to: " << outfile << std::endl;
   o << j.dump(2) << std::endl;
   o.close();
+
+
 
   return 0;
 }
@@ -128,6 +196,8 @@ int get_no_roof_surfaces(const json& j) {
   }
   return total;
 }
+
+
 
 
 // CityJSON files have their vertices compressed: https://www.cityjson.org/specs/1.1.1/#transform-object
