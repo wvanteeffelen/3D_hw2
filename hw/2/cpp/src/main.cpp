@@ -15,6 +15,14 @@
 #include <cstdlib>
 #include <ctime>
 
+#include <CGAL/linear_least_squares_fitting_3.h>
+#include <CGAL/Simple_cartesian.h>
+#include <CGAL/Plane_3.h>
+
+typedef CGAL::Simple_cartesian<double> Kernel;
+typedef Kernel::Point_2 Point_2;
+typedef Kernel::Point_3 Point_3;
+typedef Kernel::Plane_3 Plane_3;
 
 //-- https://github.com/nlohmann/json
 //-- used to read and write (City)JSON
@@ -107,17 +115,15 @@ int main(int argc, const char * argv[]) {
               {
                 // Keep only LoD2.2
                 if (geom["lod"] == "2.2")
-                  {
-                    lod22_geometries.push_back(geom);
-                    }
+                  {lod22_geometries.push_back(geom);}
                 }
             }
 
         // Mark BuildingPart for deletion
-        to_delete.push_back(child_id);
+          to_delete.push_back(child_id);
         }
 
-        // Remove old geometry (LoD0)
+        // Remove old geometry
         obj.erase("geometry");
 
         // Add LoD2.2 geometry to Building
@@ -132,6 +138,50 @@ int main(int argc, const char * argv[]) {
   {
     j["CityObjects"].erase(part_id);
   }
+
+  // Step 2: Triangulation of the surfaces
+  Plane_3 plane;
+  std::vector<Point_3> pts;
+
+  auto get_point = [&](int vi) -> Point_3 {
+    std::vector<int> v = j["vertices"][vi];
+    double x = v[0] * j["transform"]["scale"][0].get<double>() + j["transform"]["translate"][0].get<double>();
+    double y = v[1] * j["transform"]["scale"][1].get<double>() + j["transform"]["translate"][1].get<double>();
+    double z = v[2] * j["transform"]["scale"][2].get<double>() + j["transform"]["translate"][2].get<double>();
+    return Point_3(x, y, z);
+  };
+
+
+  for (auto& co : j["CityObjects"].items()) {
+    for (auto& g : co.value()["geometry"]) {
+      if (g["type"] == "Solid") {
+        for (auto& shell : g["boundaries"]) {
+          for (auto& s : shell){
+
+
+            
+            pts.clear();
+            for (auto& ring : s) {
+              for (auto& vertex : ring) {
+                pts.push_back(get_point(vertex.get<int>())));
+
+              }   
+           
+            }
+
+          // Dimension 0 since we're using points
+            CGAL::linear_least_squares_fitting_3(pts.begin(),pts.end(),plane,CGAL::Dimension_tag<0>());
+          } 
+        
+        }
+      }
+    }
+  };
+  std::cout << "All the points" << pts << std::endl;
+
+
+  
+
 
   
 
