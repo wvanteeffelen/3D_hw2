@@ -14,15 +14,29 @@
 #include <iomanip>
 #include <cstdlib>
 #include <ctime>
+#include <queue>
 
 #include <CGAL/linear_least_squares_fitting_3.h>
 #include <CGAL/Simple_cartesian.h>
 #include <CGAL/Plane_3.h>
+#include <CGAL/Constrained_Delaunay_triangulation_2.h>
+#include <CGAL/Triangle_2.h>
+#include <CGAL/Triangulation_face_base_with_info_2.h>
 
 typedef CGAL::Simple_cartesian<double> Kernel;
 typedef Kernel::Point_2 Point_2;
 typedef Kernel::Point_3 Point_3;
 typedef Kernel::Plane_3 Plane_3;
+
+struct FaceInfo { int nesting_level; };
+typedef CGAL::Triangulation_vertex_base_2<Kernel>                                    Vb;
+typedef CGAL::Constrained_triangulation_face_base_2<Kernel>                          Cbf;
+typedef CGAL::Triangulation_face_base_with_info_2<FaceInfo, Kernel, Cbf>             Fb;
+typedef CGAL::Triangulation_data_structure_2<Vb, Fb>                                 TDS;
+typedef CGAL::Constrained_Delaunay_triangulation_2<Kernel, TDS>                      CDT;
+
+
+
 
 //-- https://github.com/nlohmann/json
 //-- used to read and write (City)JSON
@@ -156,11 +170,19 @@ int main(int argc, const char * argv[]) {
   for (auto& co : j["CityObjects"].items()) {
     for (auto& g : co.value()["geometry"]) {
       if (g["type"] == "Solid") {
-        for (auto& shell : g["boundaries"]) {
-          for (auto& s : shell){
+        json new_boundaries = json::array();
+        json new_sem_values = json::array();
+        for (int shell_idx = 0; shell_idx < (int)g["boundaries"].size(); shell_idx++) {
+          auto& shell = g["boundaries"][shell_idx];
+          json new_shell = json::array(); 
+          json new_shell_sem = json::array(); // keep track of new semantics to make it valid 
+          for (int surf_idx = 0; surf_idx < (int)shell.size(); surf_idx++) {
+            auto& s = shell[surf_idx];
+            int sem_idx = g["semantics"]["values"][shell_idx][surf_idx];
 
 
-            
+
+            // Step 2.1: compute its best-fitting plane
             pts.clear();
             for (auto& ring : s) {
               for (auto& vertex : ring) {
@@ -170,47 +192,88 @@ int main(int argc, const char * argv[]) {
            
             }
 
-          // Dimension 0 since we're using points
+            // Dimension 0 since we're using points
             CGAL::linear_least_squares_fitting_3(pts.begin(),pts.end(),plane,CGAL::Dimension_tag<0>());
-            CGAL::Constrained_Delaunay_triangulation_2<Kernel> cdt;
-            projected_pts.clear();
+
+            //Step 2.2/3 Triangulation 
+            CDT cdt;
+            
             for (auto& ring : s) {
               for (int i = 0; i < ring.size(); i++) {
                 Point_3 p1 = get_point(ring[i].get<int>());
                 Point_3 p2 = get_point(ring[(i+1) % ring.size()].get<int>());
                 Point_2 proj1 = plane.to_2d(p1);
                 Point_2 proj2 = plane.to_2d(p2);
-                projected_pts.push_back(proj1);
-                cdt.insert(proj1);
-                cdt.insert(proj2);
+                
                 cdt.insert_constraint(proj1, proj2);
               }
             }
+            
+            // Step 2.4: odd-even rule
+            // assign every face with -1 (not yet visited)
 
-            std::vector<CGAL::Triangle_2> interior_triangles;
+            for (auto fit = cdt.all_faces_begin(); fit != cdt.all_faces_end(); ++fit)
+              fit->info().nesting_level = -1;
+
+            std::queue<CDT::Face_handle> queue;
+            cdt.infinite_face()->info().nesting_level = 0;
+            queue.push(cdt.infinite_face());
+
+            while (!queue.empty()) {
+              CDT::Face_handle fh = queue.front(); queue.pop();
+                for (int i = 0; i < 3; i++) {
+                CDT::Face_handle nb = fh->neighbor(i);
+                if (nb->info().nesting_level != -1) continue;  // skip if already visited
+                bool constrained = cdt.is_constrained(CDT::Edge(fh, i));
+                if (constrained)
+                  nb->info().nesting_level = fh->info().nesting_level + 1;
+                else
+                  nb->info().nesting_level = fh->info().nesting_level;
+                queue.push(nb);
+               }
+              }
+
+
+            // Step 2.5: Keep only interior triangles and store in json file + new semantics
+            std::vector<Kernel::Triangle_2> interior_triangles;
             
             for (auto fit = cdt.finite_faces_begin(); fit != cdt.finite_faces_end(); ++fit) {
-              if (cdt.is_infinite(fit)) continue;
-              if (fit->is_constrained()) continue;
-              interior_triangles.push_back(CGAL::Triangle_2(fit->vertex(0)->point(), fit->vertex(1)->point(), fit->vertex(2)->point()));
-          }
-
-          for (const auto& tri : interior_triangles) {
-            for (int i = 0; i < 3; i++) {
-              Point_2 proj = tri.vertex(i);
-              Point_3 p3d = plane.to_3d(proj);
-              std::cout << "Triangle vertex: (" << p3d.x() << ", " << p3d.y() << ", " << p3d.z() << ")" << std::endl;
-            }
-        }
-      }
-    }
-  };
-
-  pts.clear();
-  projected_pts.clear();
-
+            if (fit->info().nesting_level % 2 == 0) continue;  //  even = exterior, odd is interior
+            
 
   
+            json triangle_ring = json::array();
+            for (int i = 0; i < 3; i++) {
+              Point_3 p = plane.to_3d(fit->vertex(i)->point());
+
+              int vx = (int)std::round((p.x() - j["transform"]["translate"][0].get<double>()) / j["transform"]["scale"][0].get<double>());
+              int vy = (int)std::round((p.y() - j["transform"]["translate"][1].get<double>()) / j["transform"]["scale"][1].get<double>());
+              int vz = (int)std::round((p.z() - j["transform"]["translate"][2].get<double>()) / j["transform"]["scale"][2].get<double>());
+
+              j["vertices"].push_back({vx, vy, vz});
+              triangle_ring.push_back((int)j["vertices"].size() - 1);
+            }
+
+            json triangle_surface = json::array();
+            triangle_surface.push_back(triangle_ring);
+            new_shell.push_back(triangle_surface); 
+            new_shell_sem.push_back(sem_idx);
+          }
+
+        }  
+
+        new_boundaries.push_back(new_shell); 
+        new_sem_values.push_back(new_shell_sem);
+      }  
+
+      g["boundaries"] = new_boundaries;  // replace old boundaries
+      g["semantics"]["values"] = new_sem_values;
+
+    }
+  }
+}
+
+pts.clear();
 
 
   
