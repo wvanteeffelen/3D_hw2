@@ -142,6 +142,7 @@ int main(int argc, const char * argv[]) {
   // Step 2: Triangulation of the surfaces
   Plane_3 plane;
   std::vector<Point_3> pts;
+  std::vector<Point_2> projected_pts;
 
   auto get_point = [&](int vi) -> Point_3 {
     std::vector<int> v = j["vertices"][vi];
@@ -163,7 +164,7 @@ int main(int argc, const char * argv[]) {
             pts.clear();
             for (auto& ring : s) {
               for (auto& vertex : ring) {
-                pts.push_back(get_point(vertex.get<int>())));
+                pts.push_back(get_point(vertex.get<int>()));
 
               }   
            
@@ -171,13 +172,42 @@ int main(int argc, const char * argv[]) {
 
           // Dimension 0 since we're using points
             CGAL::linear_least_squares_fitting_3(pts.begin(),pts.end(),plane,CGAL::Dimension_tag<0>());
-          } 
-        
+            CGAL::Constrained_Delaunay_triangulation_2<Kernel> cdt;
+            projected_pts.clear();
+            for (auto& ring : s) {
+              for (int i = 0; i < ring.size(); i++) {
+                Point_3 p1 = get_point(ring[i].get<int>());
+                Point_3 p2 = get_point(ring[(i+1) % ring.size()].get<int>());
+                Point_2 proj1 = plane.to_2d(p1);
+                Point_2 proj2 = plane.to_2d(p2);
+                projected_pts.push_back(proj1);
+                cdt.insert(proj1);
+                cdt.insert(proj2);
+                cdt.insert_constraint(proj1, proj2);
+              }
+            }
+
+            std::vector<CGAL::Triangle_2> interior_triangles;
+            
+            for (auto fit = cdt.finite_faces_begin(); fit != cdt.finite_faces_end(); ++fit) {
+              if (cdt.is_infinite(fit)) continue;
+              if (fit->is_constrained()) continue;
+              interior_triangles.push_back(CGAL::Triangle_2(fit->vertex(0)->point(), fit->vertex(1)->point(), fit->vertex(2)->point()));
+          }
+
+          for (const auto& tri : interior_triangles) {
+            for (int i = 0; i < 3; i++) {
+              Point_2 proj = tri.vertex(i);
+              Point_3 p3d = plane.to_3d(proj);
+              std::cout << "Triangle vertex: (" << p3d.x() << ", " << p3d.y() << ", " << p3d.z() << ")" << std::endl;
+            }
         }
       }
     }
   };
-  std::cout << "All the points" << pts << std::endl;
+
+  pts.clear();
+  projected_pts.clear();
 
 
   
